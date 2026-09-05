@@ -1,0 +1,23 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Node / Vite
+node_modules/
+dist/
+
+# Generated application artifacts
+generated_reports/
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
