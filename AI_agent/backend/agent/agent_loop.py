@@ -4,6 +4,7 @@ from typing import Callable, Iterable
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
+from langchain_anthropic import ChatAnthropic
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from sqlglot import exp, parse_one
@@ -160,13 +161,66 @@ def _collect_artifacts(messages) -> list[dict]:
     return artifacts
 
 
+def _configured_providers() -> list[str]:
+    """Return AI providers that have a server-side API key configured."""
+    providers = []
+    if os.getenv("GOOGLE_API_KEY", "").strip():
+        providers.append("gemini")
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        providers.append("claude")
+    return providers
+
+
+def _select_provider(requested_provider: str | None) -> str:
+    """Resolve auto/provider choice without ever exposing provider API keys."""
+    requested = (requested_provider or "auto").strip().lower()
+    if requested not in {"auto", "gemini", "claude"}:
+        raise ValueError("AI provider must be one of: auto, gemini, claude.")
+
+    configured = _configured_providers()
+    if not configured:
+        raise RuntimeError(
+            "No AI provider is configured. Set GOOGLE_API_KEY for Gemini or "
+            "ANTHROPIC_API_KEY for Claude in backend/.env."
+        )
+
+    if requested != "auto":
+        if requested not in configured:
+            env_name = "GOOGLE_API_KEY" if requested == "gemini" else "ANTHROPIC_API_KEY"
+            raise RuntimeError(
+                f"{requested.title()} is not configured on this server. Set {env_name} or choose another provider."
+            )
+        return requested
+
+    preferred = os.getenv("DEFAULT_LLM_PROVIDER", "gemini").strip().lower()
+    if preferred in configured:
+        return preferred
+    return configured[0]
+
+
+def _build_llm(provider: str):
+    """Create the LangChain chat model for the selected provider."""
+    if provider == "claude":
+        return ChatAnthropic(
+            model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+        )
+
+    return ChatGoogleGenerativeAI(
+        model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
+        temperature=0,
+        google_api_key=os.getenv("GOOGLE_API_KEY"),
+    )
+
+
 def run_query(
     user_query: str,
     role_names: list[str],
     allowed_tables: list[str],
+    provider: str = "auto",
     callback: Callable | None = None,
 ) -> dict[str, object]:
-    """Run one request with a request-scoped RBAC policy injected into the agent."""
+    """Run one request with a request-scoped RBAC policy and selected AI provider."""
     normalized_tables = _clean_allowed_tables(allowed_tables)
     roles = [role.strip() for role in role_names if role.strip()]
 
@@ -174,8 +228,10 @@ def run_query(
         return {
             "answer": "Your account has no read access to any business data tables. Please contact an administrator.",
             "artifacts": [],
+            "provider": None,
         }
 
+    selected_provider = _select_provider(provider)
     role_text = ", ".join(roles) if roles else "No assigned role"
     tables_text = ", ".join(sorted(normalized_tables))
 
@@ -230,11 +286,7 @@ USER REQUEST
 {user_query}
 """
 
-    llm = ChatGoogleGenerativeAI(
-        model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
-        temperature=0,
-        google_api_key=os.getenv("GOOGLE_API_KEY"),
-    )
+    llm = _build_llm(selected_provider)
     agent = create_agent(
         model=llm,
         tools=_make_rbac_tools(normalized_tables),
@@ -252,4 +304,8 @@ USER REQUEST
     answer = _extract_message_text(messages[-1].content)
     artifacts = _collect_artifacts(messages)
 
-    return {"answer": answer, "artifacts": artifacts}
+    return {
+        "answer": answer,
+        "artifacts": artifacts,
+        "provider": selected_provider,
+    }
