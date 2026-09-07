@@ -52,6 +52,7 @@ REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 class ChatRequest(BaseModel):
     query: str = Field(min_length=1, max_length=10000)
+    provider: str = Field(default="auto", pattern="^(auto|gemini|claude)$")
 
 
 class RegistrationSyncRequest(BaseModel):
@@ -136,7 +137,7 @@ def _agent_error(error: Exception) -> str:
     logger.exception("Agent request failed")
     if os.getenv("DEBUG_ERRORS", "false").lower() == "true":
         return f"Agent error: {type(error).__name__}: {error}"
-    return "I couldn't process that request. Please check that the backend, Gemini API key, and Supabase database connection are configured correctly."
+    return "I couldn't process that request. Please check that the selected AI provider, API key, and database connections are configured correctly."
 
 
 @app.get("/health")
@@ -167,12 +168,21 @@ def download_report(filename: str, _: dict = Depends(authenticated_user)):
 def chat(request: ChatRequest, user: dict = Depends(authenticated_user)) -> dict[str, object]:
     rbac = get_user_rbac(user)
     try:
-        result = run_query(request.query, rbac["roles"], rbac["allowed_tables"])
+        result = run_query(
+            request.query,
+            rbac["roles"],
+            rbac["allowed_tables"],
+            provider=request.provider,
+        )
     except Exception as error:
         raise HTTPException(status_code=500, detail=_agent_error(error)) from error
     if isinstance(result, dict):
-        return {"answer": result.get("answer", ""), "artifacts": result.get("artifacts", [])}
-    return {"answer": str(result), "artifacts": []}
+        return {
+            "answer": result.get("answer", ""),
+            "artifacts": result.get("artifacts", []),
+            "provider": result.get("provider"),
+        }
+    return {"answer": str(result), "artifacts": [], "provider": None}
 
 
 @app.post("/chat/stream")
@@ -189,6 +199,7 @@ def chat_stream(request: ChatRequest, user: dict = Depends(authenticated_user)):
                 request.query,
                 rbac["roles"],
                 rbac["allowed_tables"],
+                provider=request.provider,
                 callback=ProgressTracer(emit),
             )
             if isinstance(result, dict):
@@ -196,9 +207,10 @@ def chat_stream(request: ChatRequest, user: dict = Depends(authenticated_user)):
                     "type": "answer",
                     "answer": result.get("answer", ""),
                     "artifacts": result.get("artifacts", []),
+                    "provider": result.get("provider"),
                 })
             else:
-                events.put({"type": "answer", "answer": str(result), "artifacts": []})
+                events.put({"type": "answer", "answer": str(result), "artifacts": [], "provider": None})
         except Exception as error:
             events.put({"type": "error", "message": _agent_error(error)})
         finally:
