@@ -139,6 +139,7 @@ export default function Chatbot({ session }) {
   const [progress, setProgress] = useState([]);
   const [rbac, setRbac] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [provider, setProvider] = useState("auto");
   const messagesRef = useRef(null);
   const inputRef = useRef(null);
   const name = session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "there";
@@ -227,7 +228,7 @@ export default function Chatbot({ session }) {
           Accept: "application/x-ndjson",
           Authorization: `Bearer ${refreshed.session.access_token}`,
         },
-        body: JSON.stringify({ query: text }),
+        body: JSON.stringify({ query: text, provider }),
       });
       if (!response.ok || !response.body) {
         const data = await response.json().catch(() => ({}));
@@ -256,6 +257,7 @@ export default function Chatbot({ session }) {
               role: "assistant",
               text: eventData.answer,
               artifacts: eventData.artifacts || [],
+              provider: eventData.provider,
             }]);
           }
           if (eventData.type === "error") throw new Error(eventData.message);
@@ -310,7 +312,29 @@ export default function Chatbot({ session }) {
       <main className="gpt-main">
         <header className="gpt-topbar">
           <button className="mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar"><Menu size={20} /></button>
-          <div className="model-name"><Bot size={18} /><span>•</span> CommerceLens AI  </div>
+          <div className="model-name">
+            <Bot size={18} /><span>•</span> CommerceLens AI
+            <select
+              value={provider}
+              onChange={(event) => setProvider(event.target.value)}
+              disabled={busy}
+              aria-label="AI provider"
+              title="Choose Gemini, Claude, or let the server select an available provider"
+              style={{
+                marginLeft: 8,
+                padding: "5px 8px",
+                borderRadius: 8,
+                border: "1px solid currentColor",
+                background: "transparent",
+                color: "inherit",
+                font: "inherit",
+              }}
+            >
+              <option value="auto">Auto</option>
+              <option value="gemini">Gemini</option>
+              <option value="claude">Claude</option>
+            </select>
+          </div>
           <div className="top-role"><span className="online-dot" /> {rbac?.roles?.[0] || "Secure session"}</div>
         </header>
 
@@ -335,12 +359,19 @@ export default function Chatbot({ session }) {
                 <div className={`message-content-wrap ${message.error ? "error-wrap" : ""}`}>
                   <div className={`message-content ${message.error ? "error" : ""}`}>
                     {message.error ? message.text : (
-                      <AssistantContent
-                        text={message.text}
-                        artifacts={message.artifacts}
-                        onDownload={downloadArtifact}
-                        fetchArtifactUrl={fetchArtifactUrl}
-                      />
+                      <>
+                        <AssistantContent
+                          text={message.text}
+                          artifacts={message.artifacts}
+                          onDownload={downloadArtifact}
+                          fetchArtifactUrl={fetchArtifactUrl}
+                        />
+                        {message.provider ? (
+                          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.65 }}>
+                            Answered with {message.provider === "claude" ? "Claude" : "Gemini"}
+                          </div>
+                        ) : null}
+                      </>
                     )}
                   </div>
                 </div>
